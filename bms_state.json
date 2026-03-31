@@ -40,6 +40,14 @@
       "price": "270.00",
       "status": "3"
     },
+    "PVWW|33691|20260402|CLASSIC PLUS ROWS": {
+      "venue": "PVR: VR Bengaluru, Whitefield Road",
+      "time": "02:30 PM",
+      "date": "20260402",
+      "cat": "CLASSIC PLUS ROWS",
+      "price": "550.00",
+      "status": "3"
+    },
     "PVWW|33691|20260402|PICTURE  PERFECT": {
       "venue": "PVR: VR Bengaluru, Whitefield Road",
       "time": "02:30 PM",
@@ -61,14 +69,6 @@
       "time": "02:30 PM",
       "date": "20260402",
       "cat": "CLASSIC ROWS",
-      "price": "550.00",
-      "status": "3"
-    },
-    "PVWW|33691|20260402|CLASSIC PLUS ROWS": {
-      "venue": "PVR: VR Bengaluru, Whitefield Road",
-      "time": "02:30 PM",
-      "date": "20260402",
-      "cat": "CLASSIC PLUS ROWS",
       "price": "550.00",
       "status": "3"
     }
