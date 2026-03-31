@@ -665,7 +665,7 @@ if changes:
     )
    
     
-    else:
+else:
         print("  ✅ No changes since last check.")
 
     # Print current status
