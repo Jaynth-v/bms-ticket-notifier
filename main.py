@@ -1,4 +1,4 @@
-D"""
+"""
 BMS Ticket Checker — CI/Headless mode for GitHub Actions.
 Runs once, checks all configured watches, emails on changes.
 State is persisted via a JSON artifact.
