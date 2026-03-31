@@ -1,4 +1,4 @@
-"""
+D"""
 BMS Ticket Checker — CI/Headless mode for GitHub Actions.
 Runs once, checks all configured watches, emails on changes.
 State is persisted via a JSON artifact.
@@ -32,7 +32,8 @@ CONFIG = {
 RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 RESEND_TO_EMAIL = os.getenv("RESEND_TO_EMAIL", "")
 RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "aviiciii@resend.dev")
-
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 STATE_FILE = "bms_state.json"
 
 # ──────────────────────────────────────────────────────────────────────
@@ -519,7 +520,52 @@ def send_email(subject, changes, shows, movie_info):
     except requests.RequestException as e:
         print(f"  ❌ Email failed: {e}")
         sys.exit(1)
+def send_telegram(subject, changes, shows, movie_info):
+    token = TELEGRAM_BOT_TOKEN.strip()
+    chat_id = TELEGRAM_CHAT_ID.strip()
 
+    if not token or not chat_id:
+        print("Skipping Telegram: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing")
+        return
+
+    movie_name = movie_info.get("name", "Movie")
+
+    lines = [f"🎟 {movie_name}", ""]
+
+    if changes:
+        lines.append("Changes detected:")
+        for c in changes:
+            lines.append(f"• {c}")
+        lines.append("")
+
+    lines.append("Current shows:")
+    for s in shows[:20]:
+        cats = " | ".join(
+            f"{c.name} Rs.{c.price} ({_cat_status_label(c.status)})"
+            for c in s.categories
+        )
+        screen = f" [{s.screen_attr}]" if s.screen_attr else ""
+        lines.append(f"{s.venue_name} — {s.time}{screen}")
+        lines.append(cats)
+        lines.append("")
+
+    text = "\n".join(lines)[:4000]
+
+    try:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": text,
+            },
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            print("Telegram sent")
+        else:
+            print(f"Telegram failed: {resp.status_code} {resp.text}")
+    except requests.RequestException as e:
+        print(f"Telegram failed: {e}")
 
 # ──────────────────────────────────────────────────────────────────────
 # MAIN
@@ -596,15 +642,29 @@ def main():
         changes = detect_changes(old_state, new_state)
 
     save_state(new_state)
+    
+if changes:
+    print(f"\n  ⚡ {len(changes)} change(s) detected:")
+    for c in changes:
+        print(f"     {c}")
 
-    if changes:
-        print(f"\n  ⚡ {len(changes)} change(s) detected:")
-        for c in changes:
-            print(f"     {c}")
-        send_email(
-            f"BMS Alert: {movie_info['name']} - {len(changes)} change(s)",
-            changes, filtered, movie_info,
-        )
+    subject = f"BMS Alert: {movie_info['name']} - {len(changes)} change(s)"
+
+    send_email(
+        subject,
+        changes,
+        filtered,
+        movie_info,
+    )
+
+    send_telegram(
+        subject,
+        changes,
+        filtered,
+        movie_info,
+    )
+   
+    
     else:
         print("  ✅ No changes since last check.")
 
