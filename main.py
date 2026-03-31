@@ -643,42 +643,42 @@ def main():
 
     save_state(new_state)
     
-if changes:
-    print(f"\n  ⚡ {len(changes)} change(s) detected:")
-    for c in changes:
-        print(f"     {c}")
+    if changes:
+        print(f"\n  ⚡ {len(changes)} change(s) detected:")
+        for c in changes:
+            print(f"     {c}")
 
-    subject = f"BMS Alert: {movie_info['name']} - {len(changes)} change(s)"
+        subject = f"BMS Alert: {movie_info['name']} - {len(changes)} change(s)"
 
-    send_email(
-        subject,
-        changes,
-        filtered,
-        movie_info,
-    )
-
-    send_telegram(
-        subject,
-        changes,
-        filtered,
-        movie_info,
-    )
-   
-    
-else:
-        print("  ✅ No changes since last check.")
-
-    # Print current status
-    print(f"\n  Current status ({len(filtered)} shows):")
-    for s in filtered:
-        cats = ", ".join(
-            f"{c.name}=₹{c.price}({AVAIL_STATUS_MAP.get(c.status, ('?',''))[0]})"
-            for c in s.categories
+        send_email(
+            subject,
+            changes,
+            filtered,
+            movie_info,
         )
-        fmt = f"|{s.screen_attr}" if s.screen_attr else ""
-        print(f"    {s.venue_name} — {s.time}{fmt} [{s.date_code}] — {cats}")
 
-    print("\n  Done.")
+        send_telegram(
+            subject,
+            changes,
+            filtered,
+            movie_info,
+        )
+
+      else:
+            print("  ✅ No changes since last check.")
+
+            # Print current status
+                    print(f"\n  Current status ({len(filtered)} shows):")
+                    for s in filtered:
+                        cats = ", ".join(
+                            f"{c.name}=₹{c.price}({AVAIL_STATUS_MAP.get(c.status, ('?', ''))[0]})"
+                            for c in s.categories
+                    )
+            
+                            fmt = f"[{s.screen_attr}]" if s.screen_attr else ""
+                            print(f"    {s.venue_name} - {s.time}{fmt} [{s.date_code}] - {cats}")
+            
+                    print("\n  Done.")
 
 
 if __name__ == "__main__":
