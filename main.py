@@ -630,7 +630,7 @@ def main():
 
     save_state(new_state)
 
-    if changes:
+    if True:
         print(f"\n  ⚡ {len(changes)} change(s) detected:")
         for c in changes:
             print(f"     {c}")
