@@ -2,16 +2,15 @@
 BMS + RCB tracker for Railway
 
 BMS:
-- Applies date / theatre / time filters
+- Does NOT use date from URL
+- Uses BMS_DATES only
+- Applies theatre/time filters
 - Alerts once for each NEW matching show
-- Does not spam the same show repeatedly
-- If a show disappears and comes back later, it can alert again
+- No spam for the same show repeatedly
 
 RCB:
-- Checks the official ticket page
-- Treats the page as unavailable when the official unavailable text is present
-- Alerts once when the page becomes available/live
-- Resets when it goes back to unavailable
+- Alerts once when official page looks available
+- Resets when unavailable again
 """
 
 import os
@@ -30,7 +29,7 @@ import requests
 # ─────────────────────────────────────────────
 BMS_URL = os.getenv(
     "BMS_URL",
-    "https://in.bookmyshow.com/movies/bengaluru/project-hail-mary/buytickets/ET00481564/20260406"
+    "https://in.bookmyshow.com/movies/bengaluru/project-hail-mary/buytickets/ET00481564/20260402"
 ).strip()
 
 RCB_URL = os.getenv(
@@ -197,15 +196,12 @@ def parse_bms_url(url: str):
 
     result = {
         "event_code": None,
-        "date_code": None,
         "region_slug": None,
     }
 
     for p in parts:
         if re.match(r"^ET\d{8,}$", p):
             result["event_code"] = p
-        elif re.match(r"^\d{8}$", p):
-            result["date_code"] = p
 
     if "movies" in parts:
         idx = parts.index("movies")
@@ -220,6 +216,12 @@ def resolve_region(slug: str):
     if key in REGION_MAP:
         return REGION_MAP[key]
     return (key.upper()[:6], key, "0", "0", "")
+
+
+def get_bms_date_list():
+    if BMS_DATES:
+        return [d.strip() for d in BMS_DATES.split(",") if d.strip()]
+    return [""]
 
 
 # ─────────────────────────────────────────────
@@ -304,7 +306,6 @@ def parse_shows(data):
 
                 for st in card.get("showtimes", []):
                     sa = st.get("additionalData", {})
-
                     date_code = str(
                         sa.get("showDateCode", "") or sa.get("dateCode", "")
                     ).strip()
@@ -416,12 +417,10 @@ def make_bms_message(movie_name, shows):
             f"{c.name} Rs.{c.price} ({cat_status_label(c.status)})"
             for c in s.categories
         )
-
         screen = f" [{s.screen_attr}]" if s.screen_attr else ""
         lines.append(f"{s.venue_name} — {s.time}{screen} [{s.date_code}]")
         lines.append(cats)
         lines.append("")
-
         count += 1
         if count >= 10:
             break
@@ -437,20 +436,13 @@ def run_bms_check(state):
 
     event_code = parsed["event_code"]
     region_slug = parsed["region_slug"]
-    url_date = parsed.get("date_code", "")
 
     if not event_code or not region_slug:
         print("Invalid BMS_URL")
         return state
 
     region_code, region_slug_r, lat, lon, geohash = resolve_region(region_slug)
-
-    if BMS_DATES:
-        date_list = [d.strip() for d in BMS_DATES.split(",") if d.strip()]
-    elif url_date:
-        date_list = [url_date]
-    else:
-        date_list = [""]
+    date_list = get_bms_date_list()
 
     print("BMS date list:", date_list)
 
@@ -460,14 +452,14 @@ def run_bms_check(state):
     for dc in date_list:
         data = fetch_bms(event_code, dc, region_code, region_slug_r, lat, lon, geohash)
         if not data:
-            print("No BMS data for:", dc)
+            print("No BMS data for:", dc if dc else "(default)")
             continue
 
         if movie_name == "Unknown Movie":
             movie_name = parse_movie_info(data).get("name", movie_name)
 
         fetched = parse_shows(data)
-        print(f"BMS shows fetched for {dc}: {len(fetched)}")
+        print(f"BMS shows fetched for {dc if dc else '(default)'}: {len(fetched)}")
         all_shows.extend(fetched)
 
     print("BMS total shows fetched:", len(all_shows))
@@ -527,10 +519,8 @@ def rcb_status_from_html(html: str):
 
     if unavailable_found:
         return "unavailable"
-
     if available_found:
         return "available"
-
     return "unknown"
 
 
