@@ -1,11 +1,22 @@
 """
 BMS + RCB tracker for Railway
-BMS: sends Telegram every cycle if matching shows exist
-RCB: sends Telegram every cycle if page looks live
+
+BMS:
+- Applies date / theatre / time filters
+- Alerts once for each NEW matching show
+- Does not spam the same show repeatedly
+- If a show disappears and comes back later, it can alert again
+
+RCB:
+- Checks the official ticket page
+- Treats the page as unavailable when the official unavailable text is present
+- Alerts once when the page becomes available/live
+- Resets when it goes back to unavailable
 """
 
 import os
 import re
+import json
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -35,6 +46,7 @@ BMS_THEATRE = os.getenv("BMS_THEATRE", "").strip()
 BMS_TIME = os.getenv("BMS_TIME", "").strip()
 
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))
+STATE_FILE = "tracker_state.json"
 
 
 # ─────────────────────────────────────────────
@@ -72,6 +84,21 @@ REGION_MAP = {
     "kochi": ("KOCH", "kochi", "9.932", "76.267", "t9z"),
 }
 
+RCB_UNAVAILABLE_MARKERS = [
+    "tickets not available",
+    "please await further announcements",
+    "there is no upcoming match tickets",
+]
+
+RCB_AVAILABLE_MARKERS = [
+    "buy now",
+    "book now",
+    "add to cart",
+    "select quantity",
+    "select seats",
+    "ticket sale",
+]
+
 
 # ─────────────────────────────────────────────
 # DATA CLASSES
@@ -93,6 +120,33 @@ class ShowInfo:
     time_code: str
     screen_attr: str
     categories: list[CatInfo] = field(default_factory=list)
+
+
+# ─────────────────────────────────────────────
+# STATE
+# ─────────────────────────────────────────────
+def load_state():
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if not isinstance(data, dict):
+                return {
+                    "bms_notified_shows": [],
+                    "rcb_notified": False,
+                }
+            data.setdefault("bms_notified_shows", [])
+            data.setdefault("rcb_notified", False)
+            return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {
+            "bms_notified_shows": [],
+            "rcb_notified": False,
+        }
+
+
+def save_state(state):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2)
 
 
 # ─────────────────────────────────────────────
@@ -343,12 +397,16 @@ def extract_matching_shows_with_available_categories(shows):
     return matched
 
 
+def show_key(s: ShowInfo):
+    return f"{s.venue_name}|{s.time}|{s.date_code}|{s.screen_attr}"
+
+
 def make_bms_message(movie_name, shows):
     lines = [
         f"🎬 {movie_name}",
         BMS_URL,
         "",
-        "MATCHING SHOWS FOUND",
+        "NEW MATCHING SHOWS FOUND",
         ""
     ]
 
@@ -371,7 +429,7 @@ def make_bms_message(movie_name, shows):
     return "\n".join(lines)
 
 
-def run_bms_check():
+def run_bms_check(state):
     print(f"[{now_str()}] BMS check started")
 
     parsed = parse_bms_url(BMS_URL)
@@ -383,7 +441,7 @@ def run_bms_check():
 
     if not event_code or not region_slug:
         print("Invalid BMS_URL")
-        return
+        return state
 
     region_code, region_slug_r, lat, lon, geohash = resolve_region(region_slug)
 
@@ -420,11 +478,25 @@ def run_bms_check():
     matched = extract_matching_shows_with_available_categories(filtered)
     print("BMS matched available shows:", len(matched))
 
-    if matched:
-        print("BMS requirement matched -> sending Telegram")
-        send_telegram_text(make_bms_message(movie_name, matched))
+    notified = set(state.get("bms_notified_shows", []))
+    current = set()
+    new_alerts = []
+
+    for s in matched:
+        key = show_key(s)
+        current.add(key)
+        if key not in notified:
+            new_alerts.append(s)
+
+    if new_alerts:
+        print("New BMS matching shows found -> sending Telegram")
+        send_telegram_text(make_bms_message(movie_name, new_alerts))
     else:
-        print("No BMS show matched your requirement right now")
+        print("No new BMS matching shows to notify")
+
+    state["bms_notified_shows"] = list(current)
+    save_state(state)
+    return state
 
 
 # ─────────────────────────────────────────────
@@ -447,49 +519,54 @@ def fetch_rcb_page():
     return resp.text
 
 
-def rcb_looks_live(html: str):
+def rcb_status_from_html(html: str):
     text = strip_html(html).lower()
 
-    live_keywords = [
-        "buy now",
-        "book now",
-        "add to cart",
-        "select quantity",
-        "select seats",
-        "tickets",
-    ]
+    unavailable_found = any(marker in text for marker in RCB_UNAVAILABLE_MARKERS)
+    available_found = any(marker in text for marker in RCB_AVAILABLE_MARKERS)
 
-    unavailable_keywords = [
-        "tickets not available",
-        "await further announcements",
-        "coming soon",
-        "sold out",
-    ]
+    if unavailable_found:
+        return "unavailable"
 
-    if any(k in text for k in unavailable_keywords):
-        return False
+    if available_found:
+        return "available"
 
-    return any(k in text for k in live_keywords)
+    return "unknown"
 
 
-def run_rcb_check():
+def run_rcb_check(state):
     print(f"[{now_str()}] RCB check started")
 
     if not RCB_URL:
         print("RCB_URL missing")
-        return
+        return state
 
     try:
         html = fetch_rcb_page()
     except Exception as e:
         print("RCB fetch failed:", str(e))
-        return
+        return state
 
-    if rcb_looks_live(html):
-        print("RCB seems live -> sending Telegram")
-        send_telegram_text(f"🏏 RCB tickets may be LIVE\n{RCB_URL}")
+    status = rcb_status_from_html(html)
+    print("RCB status:", status)
+
+    if status == "available":
+        if not state.get("rcb_notified", False):
+            print("RCB became available -> sending Telegram")
+            send_telegram_text(f"🏏 RCB tickets may be LIVE\n{RCB_URL}")
+            state["rcb_notified"] = True
+            save_state(state)
+        else:
+            print("RCB already notified, no spam")
     else:
-        print("RCB does not look live right now")
+        if state.get("rcb_notified", False):
+            print("RCB no longer available/clear -> resetting notify flag")
+            state["rcb_notified"] = False
+            save_state(state)
+        else:
+            print("RCB not available right now")
+
+    return state
 
 
 # ─────────────────────────────────────────────
@@ -497,8 +574,9 @@ def run_rcb_check():
 # ─────────────────────────────────────────────
 def main():
     print(f"\n==== Tracker cycle at {now_str()} ====")
-    run_bms_check()
-    run_rcb_check()
+    state = load_state()
+    state = run_bms_check(state)
+    state = run_rcb_check(state)
     print("Cycle done")
 
 
@@ -511,4 +589,3 @@ if __name__ == "__main__":
 
         print(f"Sleeping {CHECK_INTERVAL} seconds...\n")
         time.sleep(CHECK_INTERVAL)
-        
