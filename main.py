@@ -1,13 +1,12 @@
 """
 BMS + RCB tracker for Railway
-Sends Telegram whenever page state changes
+BMS: sends Telegram every cycle if matching shows exist
+RCB: sends Telegram every cycle if page looks live
 """
 
 import os
 import re
-import json
 import time
-import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from urllib.parse import urlparse
@@ -20,7 +19,7 @@ import requests
 # ─────────────────────────────────────────────
 BMS_URL = os.getenv(
     "BMS_URL",
-    "https://in.bookmyshow.com/movies/bengaluru/project-hail-mary/buytickets/ET00481564/20260402"
+    "https://in.bookmyshow.com/movies/bengaluru/project-hail-mary/buytickets/ET00481564/20260406"
 ).strip()
 
 RCB_URL = os.getenv(
@@ -36,7 +35,6 @@ BMS_THEATRE = os.getenv("BMS_THEATRE", "").strip()
 BMS_TIME = os.getenv("BMS_TIME", "").strip()
 
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))
-STATE_FILE = "tracker_state.json"
 
 
 # ─────────────────────────────────────────────
@@ -98,27 +96,6 @@ class ShowInfo:
 
 
 # ─────────────────────────────────────────────
-# STATE
-# ─────────────────────────────────────────────
-def load_state():
-    try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            if not isinstance(data, dict):
-                return {"bms_hash": "", "rcb_hash": ""}
-            data.setdefault("bms_hash", "")
-            data.setdefault("rcb_hash", "")
-            return data
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {"bms_hash": "", "rcb_hash": ""}
-
-
-def save_state(state):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2)
-
-
-# ─────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────
 def now_str():
@@ -154,10 +131,6 @@ def strip_html(html: str):
     text = re.sub(r"(?is)<[^>]+>", " ", html)
     text = re.sub(r"\s+", " ", text).strip()
     return text
-
-
-def md5_text(text: str):
-    return hashlib.md5(text.encode("utf-8")).hexdigest()
 
 
 def cat_status_label(status: str):
@@ -277,6 +250,7 @@ def parse_shows(data):
 
                 for st in card.get("showtimes", []):
                     sa = st.get("additionalData", {})
+
                     date_code = str(
                         sa.get("showDateCode", "") or sa.get("dateCode", "")
                     ).strip()
@@ -343,17 +317,30 @@ def filter_shows(shows, theatre_filter, time_periods, date_codes):
     return result
 
 
-def build_bms_signature(shows):
-    rows = []
+def extract_matching_shows_with_available_categories(shows):
+    matched = []
 
     for s in shows:
+        available_categories = []
         for c in s.categories:
-            rows.append(
-                f"{s.venue_name}|{s.time}|{s.date_code}|{s.screen_attr}|{c.name}|{c.price}|{c.status}"
+            if str(c.status) != "0":
+                available_categories.append(c)
+
+        if available_categories:
+            matched.append(
+                ShowInfo(
+                    venue_code=s.venue_code,
+                    venue_name=s.venue_name,
+                    session_id=s.session_id,
+                    date_code=s.date_code,
+                    time=s.time,
+                    time_code=s.time_code,
+                    screen_attr=s.screen_attr,
+                    categories=available_categories,
+                )
             )
 
-    rows.sort()
-    return "\n".join(rows)
+    return matched
 
 
 def make_bms_message(movie_name, shows):
@@ -361,7 +348,7 @@ def make_bms_message(movie_name, shows):
         f"🎬 {movie_name}",
         BMS_URL,
         "",
-        "BMS CHANGE DETECTED",
+        "MATCHING SHOWS FOUND",
         ""
     ]
 
@@ -373,7 +360,7 @@ def make_bms_message(movie_name, shows):
         )
 
         screen = f" [{s.screen_attr}]" if s.screen_attr else ""
-        lines.append(f"{s.venue_name} — {s.time}{screen}")
+        lines.append(f"{s.venue_name} — {s.time}{screen} [{s.date_code}]")
         lines.append(cats)
         lines.append("")
 
@@ -381,13 +368,10 @@ def make_bms_message(movie_name, shows):
         if count >= 10:
             break
 
-    if count == 0:
-        lines.append("No matching shows found.")
-
     return "\n".join(lines)
 
 
-def run_bms_check(state):
+def run_bms_check():
     print(f"[{now_str()}] BMS check started")
 
     parsed = parse_bms_url(BMS_URL)
@@ -399,7 +383,7 @@ def run_bms_check(state):
 
     if not event_code or not region_slug:
         print("Invalid BMS_URL")
-        return state
+        return
 
     region_code, region_slug_r, lat, lon, geohash = resolve_region(region_slug)
 
@@ -433,28 +417,14 @@ def run_bms_check(state):
     filtered = filter_shows(all_shows, BMS_THEATRE, BMS_TIME, BMS_DATES)
     print("BMS filtered shows:", len(filtered))
 
-    signature = build_bms_signature(filtered)
-    new_hash = md5_text(signature)
-    old_hash = state.get("bms_hash", "")
+    matched = extract_matching_shows_with_available_categories(filtered)
+    print("BMS matched available shows:", len(matched))
 
-    print("BMS old hash:", old_hash)
-    print("BMS new hash:", new_hash)
-
-    if not old_hash:
-        print("BMS first run. Saving baseline only.")
-        state["bms_hash"] = new_hash
-        save_state(state)
-        return state
-
-    if new_hash != old_hash:
-        print("BMS changed -> sending Telegram")
-        send_telegram_text(make_bms_message(movie_name, filtered))
-        state["bms_hash"] = new_hash
-        save_state(state)
+    if matched:
+        print("BMS requirement matched -> sending Telegram")
+        send_telegram_text(make_bms_message(movie_name, matched))
     else:
-        print("No BMS change")
-
-    return state
+        print("No BMS show matched your requirement right now")
 
 
 # ─────────────────────────────────────────────
@@ -477,57 +447,49 @@ def fetch_rcb_page():
     return resp.text
 
 
-def build_rcb_signature(html: str):
+def rcb_looks_live(html: str):
     text = strip_html(html).lower()
 
-    keep_words = []
-    for part in text.split():
-        if len(part) > 2:
-            keep_words.append(part)
+    live_keywords = [
+        "buy now",
+        "book now",
+        "add to cart",
+        "select quantity",
+        "select seats",
+        "tickets",
+    ]
 
-    cleaned = " ".join(keep_words[:2000])
-    return cleaned
+    unavailable_keywords = [
+        "tickets not available",
+        "await further announcements",
+        "coming soon",
+        "sold out",
+    ]
+
+    if any(k in text for k in unavailable_keywords):
+        return False
+
+    return any(k in text for k in live_keywords)
 
 
-def make_rcb_message():
-    return f"🏏 RCB PAGE CHANGE DETECTED\n{RCB_URL}"
-
-
-def run_rcb_check(state):
+def run_rcb_check():
     print(f"[{now_str()}] RCB check started")
 
     if not RCB_URL:
         print("RCB_URL missing")
-        return state
+        return
 
     try:
         html = fetch_rcb_page()
     except Exception as e:
         print("RCB fetch failed:", str(e))
-        return state
+        return
 
-    signature = build_rcb_signature(html)
-    new_hash = md5_text(signature)
-    old_hash = state.get("rcb_hash", "")
-
-    print("RCB old hash:", old_hash)
-    print("RCB new hash:", new_hash)
-
-    if not old_hash:
-        print("RCB first run. Saving baseline only.")
-        state["rcb_hash"] = new_hash
-        save_state(state)
-        return state
-
-    if new_hash != old_hash:
-        print("RCB changed -> sending Telegram")
-        send_telegram_text(make_rcb_message())
-        state["rcb_hash"] = new_hash
-        save_state(state)
+    if rcb_looks_live(html):
+        print("RCB seems live -> sending Telegram")
+        send_telegram_text(f"🏏 RCB tickets may be LIVE\n{RCB_URL}")
     else:
-        print("No RCB change")
-
-    return state
+        print("RCB does not look live right now")
 
 
 # ─────────────────────────────────────────────
@@ -535,9 +497,8 @@ def run_rcb_check(state):
 # ─────────────────────────────────────────────
 def main():
     print(f"\n==== Tracker cycle at {now_str()} ====")
-    state = load_state()
-    state = run_bms_check(state)
-    state = run_rcb_check(state)
+    run_bms_check()
+    run_rcb_check()
     print("Cycle done")
 
 
@@ -550,3 +511,4 @@ if __name__ == "__main__":
 
         print(f"Sleeping {CHECK_INTERVAL} seconds...\n")
         time.sleep(CHECK_INTERVAL)
+        
