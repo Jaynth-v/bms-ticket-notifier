@@ -704,7 +704,7 @@ def run_rcb_check(state):
 
     print(f"RCB status: {new_rcb_state['status']}")
 
-    if changes:
+    if True:
         for c in changes:
             print(c)
         send_telegram_text(changes[0])
