@@ -3,8 +3,7 @@ name: BMS Ticket Checker
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"
-# trigger schedule
+    - cron: "2-59/5 * * * *"
 jobs:
   check-tickets:
     runs-on: ubuntu-latest
