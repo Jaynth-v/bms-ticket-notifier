@@ -586,8 +586,16 @@ def build_rcb_state(html: str):
     }
 
 def detect_rcb_changes(old_state, new_state):
-    if new_state.get("status") != "unavailable":
+    old_status = old_state.get("status")
+    new_status = new_state.get("status")
+    old_snippet = old_state.get("snippet")
+    new_snippet = new_state.get("snippet")
+
+    if new_status != "unavailable" and (
+        old_status != new_status or old_snippet != new_snippet
+    ):
         return [f"🏏 RCB tickets might be LIVE!\n{RCB_URL}"]
+
     return []
 
 
