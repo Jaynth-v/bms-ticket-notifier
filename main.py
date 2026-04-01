@@ -35,6 +35,7 @@ RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "aviiciii@resend.dev")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 STATE_FILE = "bms_state.json"
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "45"))
 
 # ──────────────────────────────────────────────────────────────────────
 # CONSTANTS
@@ -669,5 +670,8 @@ import time
 
 if __name__ == "__main__":
     while True:
-        main()
-        time.sleep(45)
+        try:
+            main()
+        except Exception as e:
+            print(f"Fatal error: {e}")
+        time.sleep(CHECK_INTERVAL)
