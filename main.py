@@ -665,5 +665,9 @@ def main():
     print("\n  Done.")
 
 
+import time
+
 if __name__ == "__main__":
-    main()
+    while True:
+        main()
+        time.sleep(45)
